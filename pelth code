@@ -1,0 +1,101 @@
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+import wfdb
+from scipy.signal import butter, filtfilt
+
+# ==================== PARAMETERS ====================
+fs = 125.0
+num_samples = 10
+base_img_dir = "Image_Results/MIMIC_PLETH"
+data_path = "Dataset/mimic-database-1.0.0/mimic-database-1.0.0/Data2/Data"
+
+lowcut = 0.3
+highcut = 8.0
+order = 4
+
+# ==================== HELPERS ====================
+def create_dir(path):
+    os.makedirs(path, exist_ok=True)
+
+def get_n_records(base_path, n):
+    records = []
+    for root, _, files in os.walk(base_path):
+        for f in files:
+            if f.endswith(".dat"):
+                records.append(os.path.join(root, f[:-4]))
+                if len(records) == n:
+                    return records
+    return records
+
+def interpolate_nans(sig):
+    sig = sig.copy()
+    nans = np.isnan(sig)
+    if np.all(nans):
+        return np.zeros_like(sig)
+    x = np.arange(len(sig))
+    sig[nans] = np.interp(x[nans], x[~nans], sig[~nans])
+    return sig
+
+def butter_bandpass_filter(sig, lowcut, highcut, fs, order):
+    nyq = 0.5 * fs
+    b, a = butter(order, [lowcut / nyq, highcut / nyq], btype="band")
+    return filtfilt(b, a, sig, padlen=0)
+
+# ==================== PLOTTING ====================
+def save_pleth_plot(signal, save_path, filename, title):
+    t = np.arange(len(signal)) / fs * 1000  # ms
+
+    plt.figure(figsize=(15, 4))
+    plt.plot(t, signal, linewidth=0.9)
+    plt.title(title, fontweight="bold")
+    plt.xlabel("Time (ms)", fontweight="bold")
+    plt.ylabel("Amplitude (a.u.)", fontweight="bold")
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_path, filename), dpi=300)
+    plt.close()
+
+# ==================== MAIN ====================
+records = get_n_records(data_path, num_samples)
+print(f"Found {len(records)} records")
+
+for idx, record_path in enumerate(records, start=1):
+
+    print(f"\nProcessing Sample {idx}")
+    record = wfdb.rdrecord(record_path)
+
+    # ---- Identify PLETH channel ----
+    if "PLETH" not in record.sig_name:
+        print("❌ PLETH not found, skipping...")
+        continue
+
+    pleth_idx = record.sig_name.index("PLETH")
+    pleth_raw = record.p_signal[:, pleth_idx]
+
+    # ---- Clean + Filter ----
+    pleth_raw = interpolate_nans(pleth_raw)
+    pleth_filt = butter_bandpass_filter(
+        pleth_raw, lowcut, highcut, fs, order
+    )
+
+    # ---- Output directory ----
+    out_dir = f"{base_img_dir}/Sample{idx}"
+    create_dir(out_dir)
+
+    # ---- Save plots ----
+    save_pleth_plot(
+        pleth_raw,
+        out_dir,
+        "PLETH_Original.png",
+        "Original PPG (PLETH)"
+    )
+
+    save_pleth_plot(
+        pleth_filt,
+        out_dir,
+        "PLETH_Filtered.png",
+        "Filtered PPG (Butterworth 0.3–8 Hz)"
+    )
+
+print("\n✅ DONE — only original PPG (PLETH) pl
+otted correctly")
